@@ -367,6 +367,23 @@ public void updateAndRestart(ClassLoaderFiles files) {
 
 ---
 
+## 帮助重启主启动类的线程
+
+在重启主启动类的时候需要一个线程 RestartLauncher
+```java
+protected Throwable relaunch(ClassLoader classLoader) throws Exception {
+    RestartLauncher launcher = new RestartLauncher(classLoader, this.mainClassName, this.args,
+            this.exceptionHandler);
+    launcher.start();
+    launcher.join(); // Wait for the launcher to finish
+    return launcher.getError();
+}
+```
+
+…
+
+---
+
 <br>
 
 ## 参考
