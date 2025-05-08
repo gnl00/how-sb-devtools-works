@@ -2,11 +2,9 @@
 
 > springboot-devtools 是如何工作的？
 
-
-
 ## 前期准备
 
-搭建一个最简单的 SpringBoot 项目，并加上 DevTools 依赖。
+搭建一个 SpringBoot 项目，并加上 DevTools 依赖。
 
 ```xml
 <dependencies>
@@ -25,7 +23,7 @@
 </dependencies>
 ```
 
-写一个最简单的启动类
+写一个启动类
 
 ```java
 @SpringBootApplication
@@ -37,13 +35,13 @@ public class Main {
 }
 ```
 
-并且启动的时候输出是由哪个 ClassLoader 来进行类加载的。
+启动的时候看一下是由哪个 ClassLoader 来进行启动类加载的。
 
 ## 应用启动
 
 > SpringBoot 启动！
 
-观察一下输出
+观察输出
 
 ```shell
 Main.class ClassLoader= jdk.internal.loader.ClassLoaders$AppClassLoader@2b193f2d
@@ -58,17 +56,15 @@ Main.class ClassLoader= org.springframework.boot.devtools.restart.classloader.Re
  :: Spring Boot ::                (v3.2.0)
 ```
 
-> Wow
+> Wow 小 DevTools 子，没想到这么快就出现了。
 
-小 DevTools 子，没想到这么快就出现了。
-
-开始的时候是正常的 AppClassLoader 来进行 Main.class 的加载，接着又换成 RestartClassLoader 来加载 Main.class，并继续执行应用程序接下来的逻辑。
+开始的时候是正常的 AppClassLoader 来进行 Main.class 的加载，接着又换成 RestartClassLoader 来加载 Main.class，并继续执行应用程序启动流程。
 
 正不正确不要紧，大胆猜想：
 
 ## 猜想一
 
-> 引入 DevTools 依赖之后，从应用启动开始一直到整个生命周期结束，SpringBoot 应用的类用的都是 RestartClassLoader 来进行类加载的。
+> 引入 DevTools 依赖之后：从应用启动开始，到整个生命周期结束，SpringBoot 应用的类用的都是 RestartClassLoader 来进行类加载的。
 
 接下来，让我们来进行验证。
 
@@ -118,11 +114,11 @@ DevConfig.class ClassLoader= org.springframework.boot.devtools.restart.classload
 
 **结论**
 
-> SpringBoot 内部类使用 AppClassLoader 来加载；自定义类使用  RestartClassLoader 来加载。
->
+SpringBoot 内部类使用 AppClassLoader 来加载；自定义类使用  RestartClassLoader 来加载。
+
 > 为什么呢？
 >
-> 其实想法也简单，我们编写应用的时候一般都是修改自定义的类，Devtools 只需要加载修改的部分就可以了，所以使用 RestartClassLoader 来进行加载方便热部署。
+> 其实逻辑也简单，我们编写应用的时候一般都是修改自定义的类，Devtools 只需要加载修改的部分就可以了，使用 RestartClassLoader 来进行加载方便热部署。
 
 …
 
@@ -137,19 +133,17 @@ DevConfig.class ClassLoader= org.springframework.boot.devtools.restart.classload
 …
 
 启动流程如下：
-
-1、RestartApplicationListener#onApplicationStartingEvent
-
-2、Restarter#initialize –> immediateRestart –> doStart –> relaunch
-
-3、Restarter#restart 重启调用
+```shell
+RestartApplicationListener#onApplicationStartingEvent
+|-  Restarter#initialize –> immediateRestart –> doStart –> relaunch
+|-  Restarter#restart 重新执行 main 方法
+```
 
 …
 
 ```java
 private void onApplicationStartingEvent(ApplicationStartingEvent event) {
-  // It's too early to use the Spring environment but we should still allow
-  // users to disable restart using a System property.
+  // It's too early to use the Spring environment, but we should still allow users to disable restart using a System property.
   String enabled = System.getProperty(ENABLED_PROPERTY);
   RestartInitializer restartInitializer = null;
   // Restart disabled due to context in which it is running
@@ -158,43 +152,35 @@ private void onApplicationStartingEvent(ApplicationStartingEvent event) {
   // ...
   // Restart disabled due to an agent-based reloader being active
   // ...
-  
   // 初始化 Restarter
   Restarter.initialize(args, false, restartInitializer, restartOnInitialize);
-  
   // Restart disabled due to System property '%s' being set to false
   // ...
 }
 ```
 
-监听应用启动事件，在应用启动的时候初始化一个 `org.springframework.boot.devtools.restart.Restarter` 用来专门启动/重启应用。
+DevTools 会监听应用启动事件，在应用启动的时候初始化一个 `org.springframework.boot.devtools.restart.Restarter` 用来专门启动/重启应用。
 
 我们之前看到的 RestartClassLoader 就在 Restarter#doStart 中
 
 ```java
 private Throwable doStart() throws Exception {
-  Assert.notNull(this.mainClassName, "Unable to find the main class to restart");
   URL[] urls = this.urls.toArray(new URL[0]);
   // 保存本轮启动修改了的文件
   ClassLoaderFiles updatedFiles = new ClassLoaderFiles(this.classLoaderFiles);
-  // 初始化 RestartClassLoader
   ClassLoader classLoader = new RestartClassLoader(this.applicationClassLoader, urls, updatedFiles);
-  if (this.logger.isDebugEnabled()) {
-    this.logger.debug("Starting application " + this.mainClassName + " with URLs " + Arrays.asList(urls));
-  }
-  // 使用 RestartClassLoader 来启动应用
-  return relaunch(classLoader);
+  return relaunch(classLoader); // 收集到更新后的文件，使用 RestartClassLoader 来启动应用
 }
 ```
 
-接着重启应用
+接着重启应用 Restarter#relaunch
 
 ```java
-// 使用 RestartClassLoader 来重启应用
+class RestartLauncher extends Thread {} // RestartLauncher 本质上是一个线程类
+
 protected Throwable relaunch(ClassLoader classLoader) throws Exception {
-  // RestartLauncher 本质上是一个线程类
   RestartLauncher launcher = new RestartLauncher(classLoader, this.mainClassName, this.args, this.exceptionHandler);
-  launcher.start(); // 创建一个新的 RestartLauncher 线程并 start
+  launcher.start(); // 创建一个新的 RestartLauncher 线程并 start，开一个新的线程重新执行 main 方法
   launcher.join();
   return launcher.getError();
 }
@@ -203,15 +189,13 @@ protected Throwable relaunch(ClassLoader classLoader) throws Exception {
 开一个新的线程重新执行 main 方法
 
 ```java
-// RestartLauncher#run
-public void run() {
+public void run() { // RestartLauncher#run
   try {
     Class<?> mainClass = Class.forName(this.mainClassName, false, getContextClassLoader());
     Method mainMethod = mainClass.getDeclaredMethod("main", String[].class);
     mainMethod.setAccessible(true);
     mainMethod.invoke(null, new Object[] { this.args });
-  }
-  // ...
+  } catch (Exception ex) {}
 }
 ```
 
@@ -229,25 +213,13 @@ public void run() {
 
 …
 
-那么问题来了，重新执行 main 方法的时候不是也会重新执行 SpringApplication#run 方法？
-
-那接下来应该是使用的 RestartClassLoader 类加载器再加载一遍 SpringBoot 内置的 Bean 呀？
-
-但是我们手动获取到的是
-
-```shell
-jdk.internal.loader.ClassLoaders$AppClassLoader@2b193f2d
-```
-
-问题出在哪里了？
-
-> 是这样的，在第一次启动 Spring 应用的时候 AppClassLoader 已经将 SpringBoot 内部类加载过一遍了。再次使用 RestartClassLoader 来重启应用的时候就不需要再使用 RestartClassLoader  来加载已经加载过的类了。
+在第一次启动 Spring 应用的时候已经使用 AppClassLoader 将 SpringBoot 内部类加载过一遍了，进行热加载的时候再次使用 RestartClassLoader 来重启应用的时候就不需要再使用 RestartClassLoader  来加载已经加载过的类了。
 
 …
 
-> 在项目中遇到过一个和 DevTools 相关的 Bug，情景如下：
+> 在项目中遇到过一个和 DevTools 相关的 “Bug”，情景如下：
 >
-> 项目依赖了 DevTools， 并且项目中有使用到自定义的类加载器，暂且称为 CustomClassLoader。
+> 项目依赖了 DevTools， 项目中有使用到自定义的类加载器，暂且称为 CustomClassLoader。
 >
 > 项目结构如下：
 >
@@ -258,9 +230,9 @@ jdk.internal.loader.ClassLoaders$AppClassLoader@2b193f2d
 > |-- implement 依赖 base
 > ```
 >
-> base 中有一个接口 CustomInterface，implement 中有一个实现类 CustomerImplememt。然后将 implement 打包成 jar，再通过 CustomClassLoader 来动态加载。
+> base 中有一个接口 CustomInterface，implement 中有一个实现类 CustomImpl。然后将 implement 打包成 jar，再通过 CustomClassLoader 来动态加载。
 >
-> 在 CustomerImplememt 中已经明确实现了 CustomInterface，而且实现类已经通过 SPI 接口暴露。但是在使用 CustomClassLoader 来动态加载 CustomerImplememt 的时候提示：`CustomInterface: CustomerImplememt  not a subtype`。实在是奇怪。
+> 在 CustomImpl 中已经明确实现了 CustomInterface，而且实现类已经通过 SPI 接口暴露。但是在使用 CustomClassLoader 来动态加载 CustomImpl 的时候提示：`CustomInterface: CustomImpl  not a subtype`。实在是奇怪。
 >
 > 其实问题就出现在 DevTools 依赖上。因为使用了 DevTools，所以 CustomInterface 现在的 ClassLoader 已经变成了 RestartClassLoader
 >
@@ -279,9 +251,9 @@ jdk.internal.loader.ClassLoaders$AppClassLoader@2b193f2d
 >
 > （ASCII 图由 asciiflow.com 生成）
 >
-> 当我们再使用 CustomClassLoader 想要去加载 CustomerIterface 的时候会将请求传递给父类加载器，进行双亲委派加载。
+> 当我们再使用 CustomClassLoader 想要去加载 CustomerInterface 的时候会将请求传递给父类加载器，进行双亲委派加载。
 >
-> 在我们的例子中，因为 CusInterface 是由 RestartClassLoader 来加载的，CustomClassLoader 就算利用双亲委派机制也无法访问到 CustomerIterface。所以在加载的时候报错 `xxx is not a subtype`。
+> 在我们的例子中，因为 CustomerInterface 是由 RestartClassLoader 来加载的，CustomClassLoader 就算利用双亲委派机制也无法访问到 CustomerInterface。所以在加载的时候报错 `xxx is not a subtype`。
 >
 > 要解决问题很简单，只要将 dev-tools 的依赖去掉即可。
 >
@@ -333,7 +305,7 @@ public void handle(ServerHttpRequest request, ServerHttpResponse response) throw
     objectInputStream.close();
     this.server.updateAndRestart(files);
     response.setStatusCode(HttpStatus.OK);
-  }
+  } catch (Exception e) {}
   // ...
 }
 ```
@@ -370,10 +342,10 @@ public void updateAndRestart(ClassLoaderFiles files) {
 ## 帮助重启主启动类的线程
 
 在重启主启动类的时候需要一个线程 RestartLauncher
+
 ```java
 protected Throwable relaunch(ClassLoader classLoader) throws Exception {
-    RestartLauncher launcher = new RestartLauncher(classLoader, this.mainClassName, this.args,
-            this.exceptionHandler);
+    RestartLauncher launcher = new RestartLauncher(classLoader, this.mainClassName, this.args, this.exceptionHandler);
     launcher.start();
     launcher.join(); // Wait for the launcher to finish
     return launcher.getError();
@@ -388,4 +360,4 @@ protected Throwable relaunch(ClassLoader classLoader) throws Exception {
 
 ## 参考
 
-spring-boot-devtools-3.2.0 源码
+- spring-boot-devtools-3.2.0 源码
