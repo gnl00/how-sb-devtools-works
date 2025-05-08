@@ -1,5 +1,7 @@
 # how-sb-devtools-works
 
+spring-boot-devtools 通过自定义类加载器机制破坏了 Java 的双亲委派模型，以实现热部署和快速重启的功能。
+
 > springboot-devtools 是如何工作的？
 
 ## 前期准备
@@ -58,7 +60,11 @@ Main.class ClassLoader= org.springframework.boot.devtools.restart.classloader.Re
 
 > Wow 小 DevTools 子，没想到这么快就出现了。
 
-开始的时候是正常的 AppClassLoader 来进行 Main.class 的加载，接着又换成 RestartClassLoader 来加载 Main.class，并继续执行应用程序启动流程。
+开始的时候是正常的 AppClassLoader 来进行 Main.class 的加载，接着又换成 RestartClassLoader 来加载 Main.class，并继续执行应用程序启动流程。而 RestartClassLoader 就是 DevTools 自定义的类加载器。
+
+spring-boot-devtools 为了支持热部署（即在应用运行时动态替换类定义而无需重启整个应用），采用了不同的策略。它使用了一个特殊的类加载器 RestartClassLoader，该类加载器不会遵循传统的双亲委派模型。
+
+具体来说，RestartClassLoader 在查找类时首先会尝试自己加载类，而不是先委托给父类加载器。这种方式打破了传统的双亲委派机制，因为它允许子类加载器优先于父类加载器加载类。
 
 正不正确不要紧，大胆猜想：
 
@@ -203,7 +209,8 @@ public void run() { // RestartLauncher#run
 
 …
 
-> DevTools 会监听 ApplicationStartingEvent，在 Spring 应用启动的时候开启一个新的线程，利用 RestartClassLoader 重新加载并再执行一遍 main 方法。
+> DevTools 会监听 ApplicationStartingEvent，在 Spring 应用启动的时候开启一个新的线程，利用 RestartClassLoader 重新加载并再执行一遍 main 方法。每次重启时，RestartClassLoader 都会被重新创建，这有助于确保新的类定义能够被正确加载，同时也避免了旧的类定义对新版本的影响
+。
 
 …
 
